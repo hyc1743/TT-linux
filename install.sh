@@ -141,6 +141,30 @@ MaxRetentionSec=7day
 EOF
 systemctl restart systemd-journald.service
 
+log "关闭系统 Core Dump，避免 Chrome 崩溃转储占满磁盘"
+install -d -m 0755 /etc/systemd/coredump.conf.d
+cat >/etc/systemd/coredump.conf.d/99-ttlinux.conf <<'EOF'
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+EOF
+
+log "关闭 Ubuntu 错误报告服务"
+for report_unit in \
+  apport.service apport-autoreport.service apport-autoreport.path \
+  whoopsie.service; do
+  if systemctl list-unit-files "$report_unit" --no-legend 2>/dev/null | grep -q .; then
+    systemctl mask --now "$report_unit" >/dev/null 2>&1 || true
+  fi
+done
+if [[ -f /etc/default/apport ]]; then
+  if grep -q '^enabled=' /etc/default/apport; then
+    sed -i 's/^enabled=.*/enabled=0/' /etc/default/apport
+  else
+    printf '\nenabled=0\n' >>/etc/default/apport
+  fi
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 log "安装 Xfce、Xorg Dummy 驱动、中文字体及运行依赖"
 apt-get update
@@ -252,6 +276,7 @@ xset -dpms
 xhost +SI:localuser:root >/dev/null
 pkill -x light-locker 2>/dev/null || true
 pkill -x xfce4-screensaver 2>/dev/null || true
+pkill -x xfce4-power-manager 2>/dev/null || true
 
 set_xfce() {
   local channel="$1" property="$2" type="$3" value="$4"
@@ -285,6 +310,12 @@ cat >"$desktop_home/.config/autostart/light-locker.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=Disable Light Locker
+Hidden=true
+EOF
+cat >"$desktop_home/.config/autostart/xfce4-power-manager.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Disable Xfce Power Manager
 Hidden=true
 EOF
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null

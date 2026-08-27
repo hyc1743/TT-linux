@@ -9,7 +9,9 @@
 - 默认创建 4 GiB Swap，并设置 `vm.swappiness=10`
 - 关闭锁屏、屏保、DPMS、睡眠与休眠
 - 关闭 Xfce 桌面合成器，降低远程桌面重绘开销
+- 禁止 Xfce Power Manager 后台进程自动启动
 - 限制 journald 持久日志为 200 MiB、运行时日志为 100 MiB，最多保留 7 天
+- 关闭 Core Dump 及 Ubuntu Apport/Whoopsie 错误报告服务
 
 ## 支持环境
 
