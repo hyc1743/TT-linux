@@ -8,6 +8,8 @@
 - RustDesk（永久密码、设备 ID、IP 直连）
 - 默认创建 4 GiB Swap，并设置 `vm.swappiness=10`
 - 关闭锁屏、屏保、DPMS、睡眠与休眠
+- 关闭 Xfce 桌面合成器，降低远程桌面重绘开销
+- 限制 journald 持久日志为 200 MiB、运行时日志为 100 MiB，最多保留 7 天
 
 ## 支持环境
 

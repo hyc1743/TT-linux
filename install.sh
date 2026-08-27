@@ -131,6 +131,16 @@ vm.swappiness=10
 EOF
 sysctl -q -p /etc/sysctl.d/99-ttlinux-swap.conf
 
+log "限制 systemd-journald 日志占用"
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat >/etc/systemd/journald.conf.d/99-ttlinux.conf <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=100M
+MaxRetentionSec=7day
+EOF
+systemctl restart systemd-journald.service
+
 export DEBIAN_FRONTEND=noninteractive
 log "安装 Xfce、Xorg Dummy 驱动、中文字体及运行依赖"
 apt-get update
@@ -253,6 +263,7 @@ set_xfce xfce4-power-manager /xfce4-power-manager/dpms-enabled bool false
 set_xfce xfce4-power-manager /xfce4-power-manager/inactivity-on-ac int 0
 set_xfce xfce4-power-manager /xfce4-power-manager/lock-screen-suspend-hibernate bool false
 set_xfce xfce4-session /shutdown/LockScreen bool false
+set_xfce xfwm4 /general/use_compositing bool false
 EOF
 chmod 0755 /usr/local/bin/ttlinux-session-setup
 cat >"$desktop_home/.config/autostart/ttlinux-session.desktop" <<'EOF'
@@ -309,7 +320,6 @@ ulimit -Sn "$CHROME_NOFILE_LIMIT"
 
 exec /usr/bin/google-chrome-stable \
   --disable-web-security \
-  --disable-dev-shm-usage \
   --no-default-browser-check \
   --no-first-run \
   --user-data-dir="$HOME/.config/google-chrome-ttlinux" \
