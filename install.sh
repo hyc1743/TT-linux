@@ -6,6 +6,7 @@ set -Eeuo pipefail
 
 readonly DESKTOP_USER="${TT_DESKTOP_USER:-ttlinux}"
 readonly RUSTDESK_PORT="21118"
+readonly SWAP_SIZE_GB="${TT_SWAP_SIZE_GB:-4}"
 
 log() { printf '\n\033[1;32m[TT-linux]\033[0m %s\n' "$*"; }
 die() { printf '\n[TT-linux] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -24,6 +25,9 @@ if [[ "${ID:-}" != ubuntu && "${ID_LIKE:-}" != *debian* ]]; then
 fi
 if [[ $(dpkg --print-architecture) != amd64 ]]; then
   die "Google Chrome 官方 Linux 包仅支持 amd64；当前架构为 $(dpkg --print-architecture)。"
+fi
+if [[ ! "$SWAP_SIZE_GB" =~ ^[1-9][0-9]*$ ]] || (( 10#$SWAP_SIZE_GB > 64 )); then
+  die "TT_SWAP_SIZE_GB 必须是 1 到 64 之间的整数。"
 fi
 
 # Prefer the controlling terminal for prompts. Some web SSH consoles do not
@@ -88,6 +92,44 @@ case "$SCREEN_MODE" in
     ;;
   *) die "不支持的分辨率：${SCREEN_MODE}；可选值为 1600x900、1920x1080、2560x1440。" ;;
 esac
+
+log "配置 ${SWAP_SIZE_GB} GiB Swap（vm.swappiness=10）"
+swapfile=/swapfile
+expected_swap_bytes=$((SWAP_SIZE_GB * 1024 * 1024 * 1024))
+current_swap_bytes=0
+if [[ -f "$swapfile" ]]; then
+  current_swap_bytes="$(stat -c %s "$swapfile" 2>/dev/null || echo 0)"
+fi
+
+if [[ "$current_swap_bytes" -ne "$expected_swap_bytes" ]]; then
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -Fxq "$swapfile"; then
+    swapoff "$swapfile"
+  fi
+  rm -f "$swapfile"
+  if ! fallocate -l "${SWAP_SIZE_GB}G" "$swapfile"; then
+    dd if=/dev/zero of="$swapfile" bs=1M count="$((SWAP_SIZE_GB * 1024))" status=progress
+  fi
+  chmod 0600 "$swapfile"
+  mkswap "$swapfile" >/dev/null
+fi
+
+if ! swapon --show=NAME --noheadings 2>/dev/null | grep -Fxq "$swapfile"; then
+  # Some filesystems reject fallocate-created swap files. Recreate it with dd
+  # in that case so the installer also works on such server images.
+  if ! swapon "$swapfile" 2>/dev/null; then
+    rm -f "$swapfile"
+    dd if=/dev/zero of="$swapfile" bs=1M count="$((SWAP_SIZE_GB * 1024))" status=progress
+    chmod 0600 "$swapfile"
+    mkswap "$swapfile" >/dev/null
+    swapon "$swapfile"
+  fi
+fi
+grep -Eq '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab || \
+  printf '/swapfile none swap sw 0 0\n' >>/etc/fstab
+cat >/etc/sysctl.d/99-ttlinux-swap.conf <<'EOF'
+vm.swappiness=10
+EOF
+sysctl -q -p /etc/sysctl.d/99-ttlinux-swap.conf
 
 export DEBIAN_FRONTEND=noninteractive
 log "安装 Xfce、Xorg Dummy 驱动、中文字体及运行依赖"
@@ -326,6 +368,7 @@ printf '\n\033[1;32m============================================================
 printf '\033[1;32m TT-linux 安装完成\033[0m\n'
 printf ' 桌面用户       : %s\n' "$DESKTOP_USER"
 printf ' 桌面分辨率     : %s\n' "$SCREEN_MODE"
+printf ' Swap           : %s GiB（swappiness=10）\n' "$SWAP_SIZE_GB"
 printf ' RustDesk 设备 ID: %s\n' "$rustdesk_id"
 printf ' IP 直连地址    : %s:%s\n' "$public_ip" "$RUSTDESK_PORT"
 printf ' Chrome 启动脚本: %s/Desktop/start-chrome.sh\n' "$desktop_home"
