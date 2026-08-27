@@ -26,10 +26,14 @@ if [[ $(dpkg --print-architecture) != amd64 ]]; then
   die "Google Chrome 官方 Linux 包仅支持 amd64；当前架构为 $(dpkg --print-architecture)。"
 fi
 
-# When invoked as `curl ... | bash`, stdin contains the script rather than the
-# terminal. Read prompts explicitly from the controlling terminal when present.
+# Prefer the controlling terminal for prompts. Some web SSH consoles do not
+# provide /dev/tty but do provide a terminal on stdin, so support that as well.
+PROMPT_INPUT=/dev/tty
 HAS_TTY=false
 if ( : </dev/tty ) 2>/dev/null; then
+  HAS_TTY=true
+elif [[ -t 0 ]]; then
+  PROMPT_INPUT=/dev/stdin
   HAS_TTY=true
 fi
 
@@ -38,10 +42,10 @@ if [[ -z ${RUSTDESK_PASSWORD:-} ]]; then
     die "非交互运行时请通过 RUSTDESK_PASSWORD 环境变量提供永久密码。"
   fi
   while :; do
-    read -r -s -p "请输入 RustDesk 永久密码（至少 6 位）: " RUSTDESK_PASSWORD </dev/tty
+    read -r -s -p "请输入 RustDesk 永久密码（至少 6 位）: " RUSTDESK_PASSWORD <"$PROMPT_INPUT"
     printf '\n'
     [[ ${#RUSTDESK_PASSWORD} -ge 6 ]] || { echo "密码至少需要 6 位。"; continue; }
-    read -r -s -p "请再次输入 RustDesk 永久密码: " password_confirm </dev/tty
+    read -r -s -p "请再次输入 RustDesk 永久密码: " password_confirm <"$PROMPT_INPUT"
     printf '\n'
     [[ "$RUSTDESK_PASSWORD" == "$password_confirm" ]] && break
     echo "两次输入不一致，请重试。"
@@ -55,7 +59,7 @@ if [[ -z ${TT_SCREEN_MODE:-} ]]; then
     printf '  1) 1600x900\n'
     printf '  2) 1920x1080（默认）\n'
     printf '  3) 2560x1440\n'
-    read -r -p '请输入选项 [2]: ' screen_choice </dev/tty
+    read -r -p '请输入选项 [2]: ' screen_choice <"$PROMPT_INPUT"
     case "${screen_choice:-2}" in
       1) SCREEN_MODE="1600x900" ;;
       2) SCREEN_MODE="1920x1080" ;;

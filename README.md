@@ -17,8 +17,10 @@
 ## 一键安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hyc1743/TT-linux/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hyc1743/TT-linux/main/install.sh -o /tmp/tt-linux-install.sh && bash /tmp/tt-linux-install.sh
 ```
+
+先下载再执行可以为密码和分辨率选择保留终端输入；请勿使用 `curl ... | bash`，部分 Web SSH 控制台不会为管道中的脚本提供可交互的 `/dev/tty`。
 
 安装过程中会以隐藏输入方式要求设置 RustDesk 永久密码，并提供桌面分辨率选项：
 
