@@ -5,7 +5,7 @@
 - Xfce 桌面与 LightDM 自动登录
 - Xorg Dummy 显示驱动，可选 **1600×900、1920×1080、2560×1440**，默认 **1920×1080**
 - Google Chrome Stable（中文字体、解除跨域限制、`nofile=65535`）
-- 远控软件二选一：**UU Remote** 或 **RustDesk**
+- 远控软件可安装 **UU Remote**、**RustDesk** 或同时安装两者
 - 默认创建 4 GiB Swap，并设置 `vm.swappiness=10`
 - 关闭锁屏、屏保、DPMS、睡眠与休眠
 - 关闭 Xfce 桌面合成器，降低远程桌面重绘开销
@@ -34,14 +34,21 @@ curl -fsSL https://raw.githubusercontent.com/hyc1743/TT-linux/main/install.sh -o
 
 1. `UU Remote`（Ubuntu 22.04 / 24.04）
 2. `RustDesk`（默认）
+3. 同时安装 `UU Remote` 和 `RustDesk`
 
-选择 RustDesk 时会以隐藏输入方式要求设置永久密码。两种方案都会提供桌面分辨率选项：
+选择 RustDesk 或同时安装两者时，会以隐藏输入方式要求设置 RustDesk 永久密码。所有方案都会提供桌面分辨率选项：
 
 1. `1600x900`
 2. `1920x1080`（默认，直接回车即可）
 3. `2560x1440`
 
-选择 RustDesk 后，终端会输出：
+安装完成后会检测并输出当前已安装的全部远控软件信息。选择一个方案不会卸载另一个方案，因此可以直接重新执行脚本进行追加安装：
+
+- 旧版本已经安装 RustDesk：重新执行并选择 `UU Remote`，即可保留 RustDesk 并增加 UU Remote。
+- 已经安装 UU Remote：重新执行并选择 `RustDesk`，即可保留 UU Remote 并增加 RustDesk。
+- 两者均未安装：可以直接选择“同时安装”。
+
+检测到 RustDesk 时，终端会输出：
 
 - RustDesk 设备 ID
 - RustDesk IP 直连地址（TCP 21118）
@@ -63,23 +70,45 @@ TT_REMOTE=uu-remote TT_SCREEN_MODE='1920x1080' TT_SWAP_SIZE_GB=4 \
   bash /tmp/tt-linux-install.sh
 ```
 
-`TT_REMOTE` 支持 `uu-remote` 或 `rustdesk`。非交互运行未指定时为兼容旧用法默认选择 RustDesk，未指定 `TT_SCREEN_MODE` 时默认使用 `1920x1080`。
+同时安装两者：
+
+```bash
+TT_REMOTE=both RUSTDESK_PASSWORD='你的永久密码' \
+  TT_SCREEN_MODE='1920x1080' TT_SWAP_SIZE_GB=4 \
+  bash /tmp/tt-linux-install.sh
+```
+
+`TT_REMOTE` 支持 `uu-remote`、`rustdesk` 或 `both`。非交互运行未指定时为兼容旧用法默认选择 RustDesk，未指定 `TT_SCREEN_MODE` 时默认使用 `1920x1080`。无论选择哪个值，脚本都不会主动卸载已经存在的另一套远控软件。
 
 ## UU Remote 首次登录
 
-安装脚本不会等待图形界面中的账号操作。UU Bridge 安装完成后，其管理控制台仅监听服务器的 `127.0.0.1:6080`。在本地电脑建立 SSH 隧道：
-
-```bash
-ssh -L 6080:127.0.0.1:6080 root@服务器IP
-```
-
-保持 SSH 连接，在本地浏览器打开：
+首次安装 UU Remote 时，脚本会临时启动公网登录控制台并监听：
 
 ```text
-http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale&reconnect=1
+0.0.0.0:6080
 ```
 
-在页面内完成网易 UU 账号登录和设备绑定。控制台与桌面中继均仅绑定 loopback，不需要在云安全组开放 6080、5920 或 5922 端口。完成登录后可以关闭 SSH 隧道；`uu-remote-bridge.service` 会随 `ttlinux` 的自动登录会话启动。
+按照终端提示，在云服务器安全组中临时放行 **TCP 6080**，然后直接在任意电脑或手机浏览器访问：
+
+```text
+http://服务器公网IP:6080/vnc.html?autoconnect=1&resize=scale&reconnect=1
+```
+
+在页面内完成网易 UU 账号登录和设备绑定，然后回到 SSH 安装终端按 Enter。脚本会立即：
+
+1. 停止并禁用公网 noVNC 控制台服务；
+2. 删除 `0.0.0.0` 监听配置；
+3. 删除由脚本临时添加的 UFW 6080 规则。
+
+随后还需要在云平台安全组中删除临时的 TCP 6080 入站规则。UU 的桌面中继仍然只在服务器本机运行，`uu-remote-bridge.service` 会随 `ttlinux` 自动登录会话启动。
+
+重新执行安装时，如果检测到 UU Remote 已存在，默认不会再次开放登录端口。需要重新认证时使用：
+
+```bash
+TT_REMOTE=uu-remote TT_UU_PUBLIC_LOGIN=on bash /tmp/tt-linux-install.sh
+```
+
+自动化安装无法等待人工认证时可以设置 `TT_UU_PUBLIC_LOGIN=off`，跳过临时公网登录步骤。
 
 脚本当前固定使用上游提交 `75405e83a6ce0ac5b588aeead54cfa234d192edb`，避免未经适配的上游更新直接改变已验证的二进制补丁和运行路径。
 

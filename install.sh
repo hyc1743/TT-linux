@@ -49,13 +49,28 @@ fi
 REMOTE_SOFTWARE="${TT_REMOTE:-}"
 if [[ -z "$REMOTE_SOFTWARE" ]]; then
   if [[ $HAS_TTY == true ]]; then
+    existing_remote_text=""
+    if command -v rustdesk >/dev/null 2>&1; then
+      existing_remote_text="RustDesk"
+    fi
+    existing_desktop_home="$(getent passwd "$DESKTOP_USER" 2>/dev/null | cut -d: -f6)"
+    existing_desktop_home="${existing_desktop_home:-/home/$DESKTOP_USER}"
+    if [[ -x "$existing_desktop_home/.local/bin/uu-remote" ]]; then
+      existing_remote_text="${existing_remote_text:+${existing_remote_text} + }UU Remote"
+    fi
     printf '\n请选择远程控制软件：\n'
+    if [[ -n "$existing_remote_text" ]]; then
+      printf '  当前已安装：%s（本次不会卸载）\n' "$existing_remote_text"
+    fi
     printf '  1) UU Remote（支持 Ubuntu 22.04 / 24.04）\n'
     printf '  2) RustDesk（默认）\n'
+    printf '  3) 同时安装 UU Remote 和 RustDesk\n'
+    printf '已安装的远控软件不会被卸载，可选择另一个方案进行追加安装。\n'
     read -r -p '请输入选项 [2]: ' remote_choice <"$PROMPT_INPUT"
     case "${remote_choice:-2}" in
       1) REMOTE_SOFTWARE="uu-remote" ;;
       2) REMOTE_SOFTWARE="rustdesk" ;;
+      3) REMOTE_SOFTWARE="both" ;;
       *) die "无效的远控软件选项：${remote_choice}" ;;
     esac
   else
@@ -65,15 +80,25 @@ fi
 case "${REMOTE_SOFTWARE,,}" in
   uu|uu-remote|uuremote) REMOTE_SOFTWARE="uu-remote" ;;
   rustdesk) REMOTE_SOFTWARE="rustdesk" ;;
-  *) die "TT_REMOTE 仅支持 uu-remote 或 rustdesk。" ;;
+  both|all) REMOTE_SOFTWARE="both" ;;
+  *) die "TT_REMOTE 仅支持 uu-remote、rustdesk 或 both。" ;;
 esac
-if [[ "$REMOTE_SOFTWARE" == "uu-remote" &&
+
+INSTALL_UU=false
+INSTALL_RUSTDESK=false
+case "$REMOTE_SOFTWARE" in
+  uu-remote) INSTALL_UU=true ;;
+  rustdesk) INSTALL_RUSTDESK=true ;;
+  both) INSTALL_UU=true; INSTALL_RUSTDESK=true ;;
+esac
+
+if [[ "$INSTALL_UU" == true &&
       ( "${ID:-}" != ubuntu ||
         ( "${VERSION_ID:-}" != 22.04 && "${VERSION_ID:-}" != 24.04 ) ) ]]; then
   die "UU Remote Bridge 当前支持 Ubuntu 22.04 / 24.04 amd64；当前系统为 ${PRETTY_NAME:-未知}。"
 fi
 
-if [[ "$REMOTE_SOFTWARE" == "rustdesk" && -z ${RUSTDESK_PASSWORD:-} ]]; then
+if [[ "$INSTALL_RUSTDESK" == true && -z ${RUSTDESK_PASSWORD:-} ]]; then
   if [[ $HAS_TTY != true ]]; then
     die "选择 RustDesk 非交互安装时，请通过 RUSTDESK_PASSWORD 环境变量提供永久密码。"
   fi
@@ -87,7 +112,7 @@ if [[ "$REMOTE_SOFTWARE" == "rustdesk" && -z ${RUSTDESK_PASSWORD:-} ]]; then
     echo "两次输入不一致，请重试。"
   done
 fi
-if [[ "$REMOTE_SOFTWARE" == "rustdesk" ]]; then
+if [[ "$INSTALL_RUSTDESK" == true ]]; then
   [[ ${#RUSTDESK_PASSWORD} -ge 6 ]] || die "RustDesk 永久密码至少需要 6 位。"
 fi
 
@@ -220,7 +245,7 @@ EOF
 apt-get update
 apt-get install -y google-chrome-stable
 
-if [[ "$REMOTE_SOFTWARE" == "rustdesk" ]]; then
+if [[ "$INSTALL_RUSTDESK" == true ]]; then
   log "安装最新版 RustDesk"
   rustdesk_url="$(python3 - <<'PY'
 import json, urllib.request
@@ -414,7 +439,7 @@ EOF
 chown -R "$DESKTOP_USER:$DESKTOP_USER" \
   "$desktop_home/Desktop" "$desktop_home/.config" "$desktop_home/.xprofile"
 
-if [[ "$REMOTE_SOFTWARE" == "rustdesk" ]]; then
+if [[ "$INSTALL_RUSTDESK" == true ]]; then
   log "配置 RustDesk 永久密码与 IP 直连（TCP ${RUSTDESK_PORT}）"
   systemctl enable --now rustdesk.service
   for _ in {1..30}; do
@@ -433,8 +458,10 @@ log "启动图形桌面"
 systemctl set-default graphical.target
 systemctl restart lightdm.service
 
-if [[ "$REMOTE_SOFTWARE" == "uu-remote" ]]; then
+if [[ "$INSTALL_UU" == true ]]; then
   log "安装 UU Remote Ubuntu Bridge（XFCE/X11 适配）"
+  uu_was_installed=false
+  [[ -x "$desktop_home/.local/bin/uu-remote" ]] && uu_was_installed=true
 
   # Upstream deliberately targets Ubuntu 24.04 GNOME. Keep TT-linux's XFCE
   # desktop unchanged and select upstream's loopback-only X11/VNC relay.
@@ -460,6 +487,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 installer = root / "install.sh"
 bridge = root / "scripts/uu-remote-bridge"
+console = root / "scripts/uu-remote-console"
 
 text = installer.read_text()
 ubuntu_version = sys.argv[2]
@@ -547,6 +575,20 @@ if old in text:
 elif '/usr/bin/pgrep -u "$UID" -x xfce4-session' not in text:
     raise SystemExit("无法应用 UU Bridge XFCE 会话发现适配")
 bridge.write_text(text)
+
+text = console.read_text()
+old = '''    /usr/bin/websockify --web="$novnc_root" \\
+        "127.0.0.1:$web_port" "127.0.0.1:$vnc_port" \\
+        >>"$state_dir/websockify.log" 2>&1 &'''
+if old in text:
+    new = '''    /usr/bin/websockify --web="$novnc_root" \\
+        "${UURB_CONSOLE_LISTEN_ADDRESS:-127.0.0.1}:$web_port" \\
+        "127.0.0.1:$vnc_port" \\
+        >>"$state_dir/websockify.log" 2>&1 &'''
+    text = text.replace(old, new, 1)
+elif "UURB_CONSOLE_LISTEN_ADDRESS:-127.0.0.1" not in text:
+    raise SystemExit("无法应用 UU Bridge 临时公网登录控制台适配")
+console.write_text(text)
 PY
   chown -R "$DESKTOP_USER:$DESKTOP_USER" "$UU_BRIDGE_DIR"
 
@@ -585,11 +627,63 @@ PY
   unset uu_relay_password
   (( uu_install_status == 0 )) || die "UU Remote Ubuntu Bridge 安装失败（退出码 ${uu_install_status}）。"
 
-  # Keep the management console available on loopback for first-time UU login.
-  runuser -u "$DESKTOP_USER" -- env \
-    HOME="$desktop_home" USER="$DESKTOP_USER" XDG_RUNTIME_DIR="$user_runtime_dir" \
-    DBUS_SESSION_BUS_ADDRESS="unix:path=${user_runtime_dir}/bus" \
-    systemctl --user enable --now uu-remote-console.service
+  uu_public_login="${TT_UU_PUBLIC_LOGIN:-auto}"
+  case "$uu_public_login" in
+    auto)
+      if [[ "$uu_was_installed" == false && "$HAS_TTY" == true ]]; then
+        uu_public_login=on
+      else
+        uu_public_login=off
+      fi
+      ;;
+    1|on|yes|true) uu_public_login=on ;;
+    0|off|no|false|skip) uu_public_login=off ;;
+    *) die "TT_UU_PUBLIC_LOGIN 仅支持 auto、on 或 off。" ;;
+  esac
+
+  if [[ "$uu_public_login" == on ]]; then
+    [[ "$HAS_TTY" == true ]] || die "开启 UU 公网登录控制台需要交互终端；或设置 TT_UU_PUBLIC_LOGIN=off 跳过。"
+    uu_environment="$desktop_home/.config/uu-remote-bridge/environment"
+    sed -i '/^UURB_CONSOLE_LISTEN_ADDRESS=/d' "$uu_environment"
+    printf 'UURB_CONSOLE_LISTEN_ADDRESS=0.0.0.0\n' >>"$uu_environment"
+    chown "$DESKTOP_USER:$DESKTOP_USER" "$uu_environment"
+
+    uu_ufw_rule_added=false
+    if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then
+      if ! ufw status | grep -Eq '(^|[[:space:]])6080/tcp([[:space:]]|$)'; then
+        ufw allow 6080/tcp comment 'TT-linux temporary UU login' >/dev/null
+        uu_ufw_rule_added=true
+      fi
+    fi
+
+    cleanup_uu_public_console() {
+      runuser -u "$DESKTOP_USER" -- env \
+        HOME="$desktop_home" USER="$DESKTOP_USER" XDG_RUNTIME_DIR="$user_runtime_dir" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=${user_runtime_dir}/bus" \
+        systemctl --user disable --now uu-remote-console.service >/dev/null 2>&1 || true
+      sed -i '/^UURB_CONSOLE_LISTEN_ADDRESS=/d' "$uu_environment" 2>/dev/null || true
+      if [[ "$uu_ufw_rule_added" == true ]]; then
+        ufw --force delete allow 6080/tcp >/dev/null 2>&1 || true
+      fi
+    }
+    trap cleanup_uu_public_console EXIT INT TERM
+
+    runuser -u "$DESKTOP_USER" -- env \
+      HOME="$desktop_home" USER="$DESKTOP_USER" XDG_RUNTIME_DIR="$user_runtime_dir" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=${user_runtime_dir}/bus" \
+      systemctl --user restart uu-remote-console.service
+
+    uu_login_ip="$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+    [[ -n "$uu_login_ip" ]] || uu_login_ip="$(hostname -I | awk '{print $1}')"
+    printf '\n\033[1;33m[TT-linux] UU Remote 临时登录控制台已开放\033[0m\n'
+    printf '浏览器访问：http://%s:6080/vnc.html?autoconnect=1&resize=scale&reconnect=1\n' "$uu_login_ip"
+    printf '请先在云服务器安全组临时放行 TCP 6080，然后完成 UU 登录和设备绑定。\n'
+    read -r -p '确认已经完成 UU 登录认证后按 Enter，脚本将立即关闭公网控制台: ' _ <"$PROMPT_INPUT"
+
+    cleanup_uu_public_console
+    trap - EXIT INT TERM
+    log "UU 公网登录控制台已关闭，临时 UFW 规则已清理"
+  fi
 fi
 
 public_ip="$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
@@ -600,8 +694,21 @@ printf '\033[1;32m TT-linux 安装完成\033[0m\n'
 printf ' 桌面用户       : %s\n' "$DESKTOP_USER"
 printf ' 桌面分辨率     : %s\n' "$SCREEN_MODE"
 printf ' Swap           : %s GiB（swappiness=10）\n' "$SWAP_SIZE_GB"
-printf ' 远控软件       : %s\n' "$REMOTE_SOFTWARE"
-if [[ "$REMOTE_SOFTWARE" == "rustdesk" ]]; then
+printf ' 本次远控操作   : %s\n' "$REMOTE_SOFTWARE"
+
+rustdesk_installed=false
+uu_installed=false
+command -v rustdesk >/dev/null 2>&1 && rustdesk_installed=true
+[[ -x "$desktop_home/.local/bin/uu-remote" ]] && uu_installed=true
+
+installed_remotes=""
+[[ "$rustdesk_installed" == true ]] && installed_remotes="RustDesk"
+if [[ "$uu_installed" == true ]]; then
+  installed_remotes="${installed_remotes:+${installed_remotes} + }UU Remote"
+fi
+printf ' 当前远控软件   : %s\n' "${installed_remotes:-未检测到}"
+
+if [[ "$rustdesk_installed" == true ]]; then
   rustdesk_id=""
   for _ in {1..60}; do
     rustdesk_id="$(rustdesk --get-id 2>/dev/null | tr -d '\r\n[:space:]' || true)"
@@ -611,9 +718,9 @@ if [[ "$REMOTE_SOFTWARE" == "rustdesk" ]]; then
   [[ -n "$rustdesk_id" ]] || rustdesk_id="（服务仍在注册，请稍后运行 rustdesk --get-id）"
   printf ' RustDesk 设备 ID: %s\n' "$rustdesk_id"
   printf ' IP 直连地址    : %s:%s\n' "$public_ip" "$RUSTDESK_PORT"
-else
-  printf ' UU 管理控制台  : http://127.0.0.1:6080/vnc.html\n'
-  printf ' 首次登录隧道   : ssh -L 6080:127.0.0.1:6080 root@%s\n' "$public_ip"
+fi
+if [[ "$uu_installed" == true ]]; then
+  printf ' UU 公网控制台  : 已关闭（需要登录认证时可设置 TT_UU_PUBLIC_LOGIN=on）\n'
   printf ' UU 服务状态    : sudo -u %s XDG_RUNTIME_DIR=/run/user/%s systemctl --user status uu-remote-bridge\n' \
     "$DESKTOP_USER" "$(id -u "$DESKTOP_USER")"
 fi
